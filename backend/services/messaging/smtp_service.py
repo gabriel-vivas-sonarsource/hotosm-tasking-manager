@@ -3,7 +3,9 @@ from itsdangerous import URLSafeTimedSerializer
 from flask import current_app
 from flask_mail import Message
 
-from backend import mail
+from backend import mail, create_app
+from backend.models.postgis.message import Message as PostgisMessage
+from backend.models.postgis.statuses import EncouragingEmailType
 from backend.services.messaging.template_service import (
     get_template,
     format_username_link,
@@ -56,6 +58,42 @@ class SMTPService:
 
         subject = "New contact from {name}".format(name=data.get("name"))
         SMTPService._send_message(email_to, subject, message, message)
+
+    @staticmethod
+    def send_email_to_contributors_on_project_progress(
+        email_type: str,
+        project_id: int = None,
+        project_name: str = None,
+        project_completion: int = None,
+    ):
+        """ Sends an encouraging email to a users when a project they have contributed to make progress"""
+        app = (
+            create_app()
+        )  # Because message-all run on background thread it needs it's own app context
+
+        with app.app_context():
+            if email_type == EncouragingEmailType.PROJECT_PROGRESS.value:
+                subject = "The project you have contributed to has made progress."
+            elif email_type == EncouragingEmailType.PROJECT_COMPLETE.value:
+                subject = "The project you have contributed to has been completed."
+            values = {
+                "EMAIL_TYPE": email_type,
+                "PROJECT_ID": project_id,
+                "PROJECT_NAME": project_name,
+                "PROJECT_COMPLETION": project_completion,
+            }
+            contributors = PostgisMessage.get_all_contributors(project_id)
+            for contributor in contributors:
+                values["USERNAME"] = contributor.username
+                html_template = get_template("encourage_mapper_en.html", values)
+                if (
+                    contributor.email_address
+                    and contributor.is_email_verified
+                    and contributor.projects_notifications
+                ):
+                    SMTPService._send_message(
+                        contributor.email_address, subject, html_template
+                    )
 
     @staticmethod
     def send_email_alert(
